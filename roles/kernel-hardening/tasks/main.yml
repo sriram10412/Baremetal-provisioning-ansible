@@ -1,0 +1,112 @@
+---
+# ══════════════════════════════════════════
+# ROLE: kernel-hardening
+# sysctl parameters, ASLR, network
+# hardening, kernel pointer hiding
+# ══════════════════════════════════════════
+
+# ── 1. APPLY SYSCTL HARDENING PARAMETERS ──
+- name: Apply kernel sysctl security settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+    sysctl_file: /etc/sysctl.d/99-hardening.conf
+  loop: "{{ kernel_sysctl_settings | dict2items }}"
+
+- name: Ensure sysctl hardening file has strict permissions
+  ansible.builtin.file:
+    path: /etc/sysctl.d/99-hardening.conf
+    owner: root
+    group: root
+    mode: '0600'
+
+# ── 2. DISABLE CORE DUMPS ──
+- name: Disable core dumps system-wide
+  ansible.builtin.copy:
+    content: |
+      # Disable core dumps — CIS Benchmark
+      * hard core 0
+      * soft core 0
+    dest: /etc/security/limits.d/10-core-dumps.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Disable core dumps via sysctl
+  ansible.posix.sysctl:
+    name: fs.suid_dumpable
+    value: '0'
+    state: present
+    reload: true
+
+- name: Disable core dumps via systemd
+  ansible.builtin.copy:
+    content: |
+      [Coredump]
+      Storage=none
+      ProcessSizeMax=0
+    dest: /etc/systemd/coredump.conf.d/disable-coredump.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# ── 3. ENABLE ASLR ──
+- name: Enable Address Space Layout Randomization (ASLR)
+  ansible.posix.sysctl:
+    name: kernel.randomize_va_space
+    value: '2'
+    state: present
+    reload: true
+
+# ── 4. DISABLE MAGIC SYSRQ ──
+- name: Disable magic SysRq key
+  ansible.posix.sysctl:
+    name: kernel.sysrq
+    value: '0'
+    state: present
+    reload: true
+
+# ── 5. RESTRICT KERNEL MODULE LOADING ──
+- name: Restrict kernel module loading to root only
+  ansible.builtin.copy:
+    content: |
+      # Only root can load kernel modules
+      kernel.modules_disabled = 0
+    dest: /etc/sysctl.d/99-modules.conf
+    owner: root
+    group: root
+    mode: '0600'
+
+# ── 6. CONFIGURE GRUB SECURITY ──
+- name: Set GRUB boot parameters for security
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX='
+    line: 'GRUB_CMDLINE_LINUX="audit=1 audit_backlog_limit=8192 apparmor=1 security=apparmor ipv6.disable=1 net.ifnames=0"'
+    state: present
+  notify: update grub
+
+# ── 7. ENABLE APPARMOR ──
+- name: Install AppArmor
+  ansible.builtin.package:
+    name:
+      - apparmor
+      - apparmor-utils
+      - apparmor-profiles
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Enable AppArmor service
+  ansible.builtin.service:
+    name: apparmor
+    state: started
+    enabled: true
+  when: ansible_os_family == "Debian"
+
+- name: Set all AppArmor profiles to enforce mode
+  ansible.builtin.shell: |
+    aa-enforce /etc/apparmor.d/* 2>/dev/null || true
+  changed_when: false
+  when: ansible_os_family == "Debian"

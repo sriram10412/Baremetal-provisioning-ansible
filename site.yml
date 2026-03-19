@@ -1,0 +1,66 @@
+---
+# ══════════════════════════════════════════════════════════
+# Bare Metal Server Hardening Playbook
+# Standards: CIS Benchmark, NIST 800-53, PCI-DSS, MAS TRM
+# Target OS: Ubuntu 22.04 LTS / Amazon Linux 2023
+# ══════════════════════════════════════════════════════════
+
+- name: Bare Metal Server Provisioning & Security Hardening
+  hosts: bare_metal_servers
+  become: true
+  become_method: sudo
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify target OS is supported
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family in ['Debian', 'RedHat']
+          - ansible_distribution_major_version | int >= 20
+        fail_msg: "Unsupported OS. Only Ubuntu 22.04+ and Amazon Linux 2023 supported."
+        success_msg: "OS check passed: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+    - name: Record hardening start time
+      ansible.builtin.set_fact:
+        hardening_start_time: "{{ ansible_date_time.iso8601 }}"
+
+    - name: Take pre-hardening snapshot marker
+      ansible.builtin.shell: |
+        echo "PRE-HARDENING: {{ inventory_hostname }} at {{ ansible_date_time.iso8601 }}" \
+          >> /var/log/hardening-audit.log
+      changed_when: false
+
+  roles:
+    - role: system-hardening       # OS updates, packages, services
+    - role: kernel-hardening       # sysctl tuning, kernel params
+    - role: filesystem-hardening   # mount options, permissions, SUID
+    - role: user-management        # users, sudo, password policy
+    - role: ssh-hardening          # SSH daemon configuration
+    - role: firewall               # UFW / firewalld rules
+    - role: fail2ban               # brute force protection
+    - role: audit                  # auditd rules, logging
+
+  post_tasks:
+    - name: Record hardening completion
+      ansible.builtin.shell: |
+        echo "POST-HARDENING: {{ inventory_hostname }} at {{ ansible_date_time.iso8601 }}" \
+          >> /var/log/hardening-audit.log
+      changed_when: false
+
+    - name: Generate hardening summary report
+      ansible.builtin.template:
+        src: hardening-report.j2
+        dest: /var/log/hardening-report-{{ ansible_date_time.date }}.txt
+        mode: '0640'
+        owner: root
+        group: root
+
+    - name: Print hardening complete message
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════
+          ✅ Hardening complete: {{ inventory_hostname }}
+          Started : {{ hardening_start_time }}
+          Finished: {{ ansible_date_time.iso8601 }}
+          Report  : /var/log/hardening-report-{{ ansible_date_time.date }}.txt
+          ════════════════════════════════════════

@@ -1,0 +1,199 @@
+---
+# ══════════════════════════════════════════
+# ROLE: system-hardening
+# OS updates, package management,
+# service hardening, time sync
+# ══════════════════════════════════════════
+
+# ── 1. SYSTEM UPDATES ──
+- name: Update all packages to latest (Ubuntu)
+  ansible.builtin.apt:
+    upgrade: dist
+    update_cache: true
+    cache_valid_time: 3600
+    autoremove: true
+    autoclean: true
+  when: ansible_os_family == "Debian"
+  notify: reboot if required
+
+- name: Update all packages to latest (Amazon Linux)
+  ansible.builtin.dnf:
+    name: "*"
+    state: latest
+    update_cache: true
+  when: ansible_os_family == "RedHat"
+  notify: reboot if required
+
+# ── 2. REMOVE UNNECESSARY PACKAGES ──
+- name: Remove unnecessary packages (attack surface reduction)
+  ansible.builtin.package:
+    name: "{{ packages_to_remove }}"
+    state: absent
+    purge: true
+
+# ── 3. INSTALL REQUIRED SECURITY PACKAGES ──
+- name: Install security packages
+  ansible.builtin.package:
+    name: "{{ packages_to_install }}"
+    state: present
+
+# ── 4. CONFIGURE AUTOMATIC SECURITY UPDATES ──
+- name: Configure unattended-upgrades (Ubuntu)
+  ansible.builtin.template:
+    src: unattended-upgrades.j2
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+  when: ansible_os_family == "Debian"
+
+- name: Enable automatic updates service
+  ansible.builtin.service:
+    name: unattended-upgrades
+    state: started
+    enabled: true
+  when: ansible_os_family == "Debian"
+
+# ── 5. SET TIMEZONE ──
+- name: Set system timezone
+  community.general.timezone:
+    name: "{{ system_timezone }}"
+
+# ── 6. CONFIGURE NTP (time integrity) ──
+- name: Install chrony for NTP
+  ansible.builtin.package:
+    name: chrony
+    state: present
+
+- name: Configure chrony NTP
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart chrony
+
+- name: Enable and start chrony
+  ansible.builtin.service:
+    name: chronyd
+    state: started
+    enabled: true
+
+# ── 7. DISABLE UNNECESSARY SERVICES ──
+- name: Disable unnecessary services
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - bluetooth
+    - cups
+    - avahi-daemon
+    - rpcbind
+    - nfs-server
+    - nis
+  failed_when: false    # service may not exist on all systems
+
+# ── 8. SECURE /tmp ──
+- name: Create systemd override for tmp.mount
+  ansible.builtin.template:
+    src: tmp-mount-options.j2
+    dest: /etc/systemd/system/tmp.mount
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd
+
+- name: Enable tmp.mount with noexec
+  ansible.builtin.systemd:
+    name: tmp.mount
+    state: started
+    enabled: true
+    daemon_reload: true
+
+# ── 9. CONFIGURE RSYSLOG ──
+- name: Configure rsyslog for comprehensive logging
+  ansible.builtin.template:
+    src: rsyslog.conf.j2
+    dest: /etc/rsyslog.conf
+    owner: root
+    group: root
+    mode: '0640'
+  notify: restart rsyslog
+
+- name: Enable rsyslog
+  ansible.builtin.service:
+    name: rsyslog
+    state: started
+    enabled: true
+
+# ── 10. CONFIGURE LOGROTATE ──
+- name: Configure logrotate
+  ansible.builtin.template:
+    src: logrotate.conf.j2
+    dest: /etc/logrotate.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# ── 11. DISABLE USB STORAGE (physical attack prevention) ──
+- name: Disable USB storage module
+  ansible.builtin.copy:
+    content: |
+      # CIS Benchmark — disable USB storage
+      install usb-storage /bin/false
+      blacklist usb-storage
+    dest: /etc/modprobe.d/usb-storage.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# ── 12. DISABLE UNCOMMON NETWORK PROTOCOLS ──
+- name: Disable uncommon network protocols
+  ansible.builtin.copy:
+    content: |
+      # Disable uncommon network protocols — CIS Benchmark
+      install dccp /bin/false
+      install sctp /bin/false
+      install rds  /bin/false
+      install tipc /bin/false
+    dest: /etc/modprobe.d/uncommon-net.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# ── 13. CONFIGURE MOTD (legal banner) ──
+- name: Set login warning banner
+  ansible.builtin.copy:
+    content: |
+      ╔══════════════════════════════════════════════════════════╗
+      ║         AUTHORISED ACCESS ONLY                           ║
+      ║                                                          ║
+      ║  This system is for authorised users only.               ║
+      ║  All activity is monitored and logged.                   ║
+      ║  Unauthorised access will be prosecuted.                 ║
+      ║                                                          ║
+      ║  Disconnect IMMEDIATELY if you are not authorised.       ║
+      ╚══════════════════════════════════════════════════════════╝
+    dest: /etc/issue
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Set network login banner
+  ansible.builtin.copy:
+    src: /etc/issue
+    dest: /etc/issue.net
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Clear MOTD
+  ansible.builtin.copy:
+    content: ""
+    dest: /etc/motd
+    owner: root
+    group: root
+    mode: '0644'

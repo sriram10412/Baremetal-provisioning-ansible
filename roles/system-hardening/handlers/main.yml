@@ -1,0 +1,54 @@
+---
+# ── system-hardening handlers ──
+- name: reboot if required
+  ansible.builtin.reboot:
+    msg: "Rebooting after system updates"
+    connect_timeout: 5
+    reboot_timeout: 600
+    pre_reboot_delay: 0
+    post_reboot_delay: 30
+    test_command: uptime
+  when: ansible_os_family == "Debian"
+  listen: reboot if required
+
+- name: restart rsyslog
+  ansible.builtin.service:
+    name: rsyslog
+    state: restarted
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart chrony
+  ansible.builtin.service:
+    name: chronyd
+    state: restarted
+
+# ── ssh-hardening handlers ──
+- name: restart sshd
+  ansible.builtin.service:
+    name: sshd
+    state: restarted
+
+- name: update grub
+  ansible.builtin.shell: update-grub
+  when: ansible_os_family == "Debian"
+
+# ── firewall handlers ──
+- name: reload firewalld
+  ansible.builtin.service:
+    name: firewalld
+    state: reloaded
+
+# ── fail2ban handlers ──
+- name: restart fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    state: restarted
+
+# ── audit handlers ──
+- name: restart auditd
+  ansible.builtin.service:
+    name: auditd
+    state: restarted

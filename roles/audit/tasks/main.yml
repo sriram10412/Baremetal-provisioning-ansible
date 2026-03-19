@@ -1,0 +1,75 @@
+---
+# ══════════════════════════════════════════
+# ROLE: audit
+# auditd configuration and rules
+# CIS Benchmark + PCI-DSS compliance
+# ══════════════════════════════════════════
+
+- name: Install auditd and plugins
+  ansible.builtin.package:
+    name:
+      - auditd
+      - audispd-plugins
+    state: present
+
+- name: Configure auditd main config
+  ansible.builtin.template:
+    src: auditd.conf.j2
+    dest: /etc/audit/auditd.conf
+    owner: root
+    group: root
+    mode: '0640'
+  notify: restart auditd
+
+- name: Deploy audit rules
+  ansible.builtin.template:
+    src: audit.rules.j2
+    dest: /etc/audit/rules.d/99-hardening.rules
+    owner: root
+    group: root
+    mode: '0640'
+  notify: restart auditd
+
+- name: Make audit rules immutable (requires reboot to change)
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/99-hardening.rules
+    line: "-e 2"     # immutable — must reboot to modify audit rules
+    state: present
+  notify: restart auditd
+
+- name: Enable and start auditd
+  ansible.builtin.service:
+    name: auditd
+    state: started
+    enabled: true
+
+- name: Configure AIDE file integrity monitoring
+  ansible.builtin.package:
+    name: aide
+    state: present
+
+- name: Initialise AIDE database
+  ansible.builtin.command:
+    cmd: aide --init
+    creates: /var/lib/aide/aide.db.new
+  register: aide_init
+  changed_when: aide_init.rc == 0
+
+- name: Move AIDE database to active location
+  ansible.builtin.copy:
+    src: /var/lib/aide/aide.db.new
+    dest: /var/lib/aide/aide.db
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
+  when: aide_init.changed
+
+- name: Schedule daily AIDE integrity check
+  ansible.builtin.cron:
+    name: "AIDE daily integrity check"
+    minute: "0"
+    hour: "3"
+    user: root
+    job: "/usr/bin/aide --check >> /var/log/aide-check.log 2>&1"
+    state: present

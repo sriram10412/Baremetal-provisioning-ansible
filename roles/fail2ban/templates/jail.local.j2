@@ -1,0 +1,33 @@
+[DEFAULT]
+# ── Global Settings ──
+bantime   = {{ fail2ban_ban_time }}
+findtime  = {{ fail2ban_find_time }}
+maxretry  = {{ fail2ban_max_retry }}
+backend   = systemd
+banaction = iptables-multiport
+banaction_allports = iptables-allports
+
+# Email alerts
+destemail = {{ fail2ban_email }}
+sendername = Fail2Ban-{{ inventory_hostname }}
+mta = sendmail
+action = %(action_mwl)s    # ban + email with whois + log lines
+
+# ── SSH Jail ──
+[sshd]
+enabled   = true
+port      = {{ ssh_port }}
+filter    = sshd-custom
+logpath   = %(syslog_authpriv)s
+maxretry  = {{ fail2ban_max_retry }}
+bantime   = {{ fail2ban_ban_time }}
+
+# ── Repeat Offender — longer ban ──
+[recidive]
+enabled   = true
+filter    = recidive
+logpath   = /var/log/fail2ban.log
+action    = iptables-allports
+bantime   = 604800       # 1 week for repeat offenders
+findtime  = 86400        # within 24 hours
+maxretry  = 5

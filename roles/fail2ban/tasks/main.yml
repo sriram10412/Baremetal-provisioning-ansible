@@ -1,0 +1,44 @@
+---
+# ══════════════════════════════════════════
+# ROLE: fail2ban
+# Brute force protection for SSH
+# and MongoDB ports
+# ══════════════════════════════════════════
+
+- name: Install fail2ban
+  ansible.builtin.package:
+    name: fail2ban
+    state: present
+
+- name: Deploy fail2ban jail.local config
+  ansible.builtin.template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart fail2ban
+
+- name: Deploy SSH jail filter
+  ansible.builtin.copy:
+    content: |
+      [Definition]
+      failregex = ^%(__prefix_line)s(?:error: PAM: )?[aA]uthentication (?:failure|error|failed) for .* from <HOST>( via \S+)?\s*$
+                  ^%(__prefix_line)s(?:error: PAM: )?User not known to the underlying authentication module for .* from <HOST>\s*$
+                  ^%(__prefix_line)sFailed \S+ for (?:invalid user )?(?P<user>.+?) from <HOST>(?: port \d+)?(?: ssh\d*)?$
+                  ^%(__prefix_line)sROOT LOGIN REFUSED.* FROM <HOST>\s*$
+                  ^%(__prefix_line)s[iI](?:llegal|nvalid) user .* from <HOST>(?: port \d+)?\s*$
+                  ^%(__prefix_line)sUser .+ from <HOST> not allowed because none of user's groups are listed in AllowGroups\s*$
+                  ^%(__prefix_line)sconnection closed by authenticating user .+ <HOST> port .+ \[preauth\]\s*$
+      ignoreregex =
+    dest: /etc/fail2ban/filter.d/sshd-custom.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart fail2ban
+
+- name: Enable and start fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: true

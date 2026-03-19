@@ -1,0 +1,167 @@
+---
+# ══════════════════════════════════════════════════════════
+# Group Variables — All Hardening Settings
+# Change these to match your environment
+# ══════════════════════════════════════════════════════════
+
+# ── SYSTEM ──
+system_timezone: "Asia/Singapore"
+system_locale: "en_US.UTF-8"
+max_log_file_size_mb: 100
+log_retention_days: 90
+
+# ── PACKAGES TO REMOVE (attack surface reduction) ──
+packages_to_remove:
+  - telnet
+  - rsh
+  - rsh-server
+  - ypbind
+  - ypserv
+  - tftp
+  - tftp-server
+  - talk
+  - talk-server
+  - xinetd
+  - xorg-x11-server-common
+  - avahi-daemon
+  - cups
+  - dhcp
+
+# ── PACKAGES TO INSTALL ──
+packages_to_install:
+  - aide              # intrusion detection
+  - auditd            # audit daemon
+  - audispd-plugins   # audit plugins
+  - fail2ban          # brute force protection
+  - ufw               # firewall (Ubuntu)
+  - libpam-pwquality  # password quality
+  - unattended-upgrades  # auto security patches
+  - apt-show-versions
+  - curl
+  - wget
+  - gnupg2
+  - ca-certificates
+  - net-tools
+  - rsyslog
+
+# ── SSH HARDENING ──
+ssh_port: 2222                          # non-default port
+ssh_permit_root_login: "no"
+ssh_password_authentication: "no"       # key-based only
+ssh_max_auth_tries: 3
+ssh_max_sessions: 2
+ssh_client_alive_interval: 300          # 5 min timeout
+ssh_client_alive_count_max: 2
+ssh_login_grace_time: 60
+ssh_x11_forwarding: "no"
+ssh_allow_tcp_forwarding: "no"
+ssh_agent_forwarding: "no"
+ssh_permit_empty_passwords: "no"
+ssh_use_pam: "yes"
+ssh_allowed_users:
+  - ec2-user
+  - ansible
+  - mongod
+ssh_allowed_ciphers:
+  - "chacha20-poly1305@openssh.com"
+  - "aes256-gcm@openssh.com"
+  - "aes128-gcm@openssh.com"
+  - "aes256-ctr"
+ssh_allowed_macs:
+  - "hmac-sha2-512-etm@openssh.com"
+  - "hmac-sha2-256-etm@openssh.com"
+  - "hmac-sha2-512"
+ssh_allowed_kex:
+  - "curve25519-sha256@libssh.org"
+  - "diffie-hellman-group16-sha512"
+  - "diffie-hellman-group18-sha512"
+
+# ── USER MANAGEMENT ──
+admin_users:
+  - name: ansible
+    groups: sudo
+    shell: /bin/bash
+    ssh_key: "ssh-rsa AAAAB3NzaC1... your-ansible-key"
+  - name: sriram
+    groups: sudo
+    shell: /bin/bash
+    ssh_key: "ssh-rsa AAAAB3NzaC1... your-personal-key"
+
+service_users:
+  - name: mongod
+    shell: /sbin/nologin     # no interactive login
+    groups: mongod
+    create_home: false
+
+# ── PASSWORD POLICY ──
+password_min_length: 14
+password_min_digits: 1
+password_min_uppercase: 1
+password_min_lowercase: 1
+password_min_special: 1
+password_max_days: 90
+password_min_days: 1
+password_warn_days: 14
+password_history: 5          # remember last 5 passwords
+
+# ── FIREWALL ──
+firewall_allowed_tcp_ports:
+  - 2222          # SSH (non-default)
+  - 27017         # MongoDB
+firewall_allowed_from_cidr: "10.0.0.0/16"   # VPC CIDR only
+firewall_default_policy: deny
+
+# ── FAIL2BAN ──
+fail2ban_max_retry: 5
+fail2ban_ban_time: 3600       # 1 hour ban
+fail2ban_find_time: 600       # within 10 minutes
+fail2ban_email: "platform-team@yourcompany.com"
+
+# ── KERNEL HARDENING (sysctl) ──
+kernel_sysctl_settings:
+  # Network hardening
+  net.ipv4.ip_forward: 0
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.default.send_redirects: 0
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv4.conf.all.accept_source_route: 0
+  net.ipv4.conf.default.accept_source_route: 0
+  net.ipv4.conf.all.log_martians: 1
+  net.ipv4.conf.default.log_martians: 1
+  net.ipv4.icmp_echo_ignore_broadcasts: 1
+  net.ipv4.icmp_ignore_bogus_error_responses: 1
+  net.ipv4.tcp_syncookies: 1
+  net.ipv4.conf.all.rp_filter: 1
+  net.ipv4.conf.default.rp_filter: 1
+  # IPv6 — disable if not needed
+  net.ipv6.conf.all.disable_ipv6: 1
+  net.ipv6.conf.default.disable_ipv6: 1
+  # Kernel hardening
+  kernel.randomize_va_space: 2           # ASLR
+  kernel.dmesg_restrict: 1              # restrict dmesg
+  kernel.kptr_restrict: 2               # hide kernel pointers
+  kernel.yama.ptrace_scope: 1           # restrict ptrace
+  kernel.perf_event_paranoid: 3         # restrict perf events
+  fs.suid_dumpable: 0                   # no SUID core dumps
+  fs.protected_hardlinks: 1
+  fs.protected_symlinks: 1
+
+# ── AUDIT RULES ──
+audit_rules:
+  - "-a always,exit -F arch=b64 -S execve -k exec_commands"
+  - "-w /etc/passwd -p wa -k identity"
+  - "-w /etc/shadow -p wa -k identity"
+  - "-w /etc/group -p wa -k identity"
+  - "-w /etc/sudoers -p wa -k sudo_changes"
+  - "-w /var/log/auth.log -p wa -k auth_log"
+  - "-a always,exit -F arch=b64 -S open -F exit=-EPERM -k access_denied"
+  - "-a always,exit -F arch=b64 -S open -F exit=-EACCES -k access_denied"
+  - "-w /sbin/insmod -p x -k kernel_modules"
+  - "-w /sbin/rmmod -p x -k kernel_modules"
+  - "-w /sbin/modprobe -p x -k kernel_modules"
+  - "-a always,exit -F arch=b64 -S mount -k mounts"
+  - "-a always,exit -F arch=b64 -S unlink -S unlinkat -S rename -S renameat -k delete"
+  - "-w /etc/ssh/sshd_config -p wa -k sshd_config"
+  - "-w /etc/cron.d -p wa -k cron"
+  - "-w /etc/crontab -p wa -k cron"

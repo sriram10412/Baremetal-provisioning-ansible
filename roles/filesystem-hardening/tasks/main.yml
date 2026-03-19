@@ -1,0 +1,110 @@
+---
+# ══════════════════════════════════════════
+# ROLE: filesystem-hardening
+# Mount options, SUID/SGID cleanup,
+# world-writable files, sticky bits
+# ══════════════════════════════════════════
+
+# ── 1. SECURE MOUNT OPTIONS ──
+- name: Add nodev,nosuid,noexec to /tmp in fstab
+  ansible.builtin.mount:
+    path: /tmp
+    src: tmpfs
+    fstype: tmpfs
+    opts: defaults,nodev,nosuid,noexec,size=2g
+    state: mounted
+
+- name: Add nodev,nosuid,noexec to /dev/shm
+  ansible.builtin.mount:
+    path: /dev/shm
+    src: tmpfs
+    fstype: tmpfs
+    opts: defaults,nodev,nosuid,noexec
+    state: mounted
+
+- name: Secure /var/tmp by binding to /tmp
+  ansible.builtin.mount:
+    path: /var/tmp
+    src: /tmp
+    fstype: none
+    opts: bind
+    state: mounted
+
+# ── 2. FIND AND REPORT SUID/SGID BINARIES ──
+- name: Find all SUID binaries
+  ansible.builtin.shell: |
+    find / -perm -4000 -type f 2>/dev/null | sort
+  register: suid_binaries
+  changed_when: false
+
+- name: Log SUID binaries found
+  ansible.builtin.shell: |
+    echo "SUID BINARIES on {{ inventory_hostname }} at {{ ansible_date_time.iso8601 }}:" \
+      >> /var/log/hardening-audit.log
+    find / -perm -4000 -type f 2>/dev/null \
+      >> /var/log/hardening-audit.log
+  changed_when: false
+
+# ── 3. REMOVE UNNECESSARY SUID BITS ──
+- name: Remove SUID bit from unnecessary binaries
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: 'a-s'
+  loop:
+    - /usr/bin/at
+    - /usr/bin/wall
+    - /usr/bin/write
+    - /usr/bin/chfn
+    - /usr/bin/chsh
+    - /usr/sbin/usernetctl
+  failed_when: false
+
+# ── 4. WORLD WRITABLE FILES ──
+- name: Find world-writable files and directories
+  ansible.builtin.shell: |
+    find / -xdev -perm -0002 -type f 2>/dev/null | grep -v /proc | grep -v /sys
+  register: world_writable
+  changed_when: false
+
+- name: Log world-writable files
+  ansible.builtin.shell: |
+    echo "WORLD-WRITABLE FILES on {{ inventory_hostname }}:" \
+      >> /var/log/hardening-audit.log
+    find / -xdev -perm -0002 -type f 2>/dev/null \
+      >> /var/log/hardening-audit.log
+  changed_when: false
+
+# ── 5. FIX PERMISSIONS ON CRITICAL FILES ──
+- name: Set strict permissions on critical system files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: '/etc/passwd',        owner: root, group: root, mode: '0644' }
+    - { path: '/etc/shadow',        owner: root, group: shadow, mode: '0640' }
+    - { path: '/etc/group',         owner: root, group: root, mode: '0644' }
+    - { path: '/etc/gshadow',       owner: root, group: shadow, mode: '0640' }
+    - { path: '/etc/ssh/sshd_config', owner: root, group: root, mode: '0600' }
+    - { path: '/boot/grub/grub.cfg', owner: root, group: root, mode: '0600' }
+    - { path: '/etc/crontab',       owner: root, group: root, mode: '0600' }
+    - { path: '/etc/cron.d',        owner: root, group: root, mode: '0700' }
+    - { path: '/var/log',           owner: root, group: syslog, mode: '0775' }
+  failed_when: false
+
+# ── 6. CONFIGURE /proc RESTRICTIONS ──
+- name: Restrict /proc filesystem
+  ansible.posix.mount:
+    path: /proc
+    src: proc
+    fstype: proc
+    opts: defaults,hidepid=2
+    state: mounted
+  failed_when: false
+
+# ── 7. STICKY BIT ON WORLD-WRITABLE DIRS ──
+- name: Ensure sticky bit on world-writable directories
+  ansible.builtin.shell: |
+    find / -xdev -perm -0002 -type d 2>/dev/null | xargs chmod +t
+  changed_when: false

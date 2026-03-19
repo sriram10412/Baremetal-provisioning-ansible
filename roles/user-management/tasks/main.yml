@@ -1,0 +1,177 @@
+---
+# ══════════════════════════════════════════
+# ROLE: user-management
+# Admin users, service accounts,
+# password policy, sudo hardening,
+# root account locking
+# ══════════════════════════════════════════
+
+# ── 1. CREATE ADMIN USERS ──
+- name: Create admin user groups
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    state: present
+  loop: "{{ admin_users }}"
+
+- name: Create admin users
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    groups: "{{ item.groups }}"
+    shell: "{{ item.shell }}"
+    create_home: true
+    password_lock: false
+    state: present
+  loop: "{{ admin_users }}"
+
+- name: Deploy SSH public keys for admin users
+  ansible.posix.authorized_key:
+    user: "{{ item.name }}"
+    key: "{{ item.ssh_key }}"
+    state: present
+    exclusive: true              # remove any other keys not in this list
+  loop: "{{ admin_users }}"
+
+- name: Set strict permissions on .ssh directories
+  ansible.builtin.file:
+    path: "/home/{{ item.name }}/.ssh"
+    state: directory
+    owner: "{{ item.name }}"
+    group: "{{ item.name }}"
+    mode: '0700'
+  loop: "{{ admin_users }}"
+
+# ── 2. CREATE SERVICE USERS ──
+- name: Create service user groups
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    state: present
+  loop: "{{ service_users }}"
+
+- name: Create service users (no login shell)
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    groups: "{{ item.groups }}"
+    shell: "{{ item.shell }}"        # /sbin/nologin
+    create_home: "{{ item.create_home }}"
+    password_lock: true              # no password login ever
+    system: true
+    state: present
+  loop: "{{ service_users }}"
+
+# ── 3. LOCK ROOT ACCOUNT ──
+- name: Lock root account password
+  ansible.builtin.user:
+    name: root
+    password_lock: true
+
+- name: Disable root SSH login (belt and braces)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PermitRootLogin'
+    line: 'PermitRootLogin no'
+    state: present
+
+# ── 4. SUDO HARDENING ──
+- name: Ensure sudo is installed
+  ansible.builtin.package:
+    name: sudo
+    state: present
+
+- name: Configure sudo — require password, no env inheritance
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: /etc/sudoers
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -cf %s   # validate before applying!
+
+- name: Configure sudo log file
+  ansible.builtin.copy:
+    content: |
+      # Log all sudo activity
+      Defaults logfile="/var/log/sudo.log"
+      Defaults log_input, log_output
+      Defaults iolog_dir="/var/log/sudo-io"
+    dest: /etc/sudoers.d/logging
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Create sudo I/O log directory
+  ansible.builtin.file:
+    path: /var/log/sudo-io
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# ── 5. PASSWORD POLICY ──
+- name: Configure password quality (pwquality)
+  ansible.builtin.template:
+    src: pwquality.conf.j2
+    dest: /etc/security/pwquality.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Configure password aging policy (login.defs)
+  ansible.builtin.lineinfile:
+    path: /etc/login.defs
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: '^PASS_MAX_DAYS', line: "PASS_MAX_DAYS {{ password_max_days }}" }
+    - { regexp: '^PASS_MIN_DAYS', line: "PASS_MIN_DAYS {{ password_min_days }}" }
+    - { regexp: '^PASS_WARN_AGE', line: "PASS_WARN_AGE {{ password_warn_days }}" }
+    - { regexp: '^PASS_MIN_LEN',  line: "PASS_MIN_LEN  {{ password_min_length }}" }
+
+- name: Configure PAM password history
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-password
+    regexp: 'pam_unix.so'
+    line: "password [success=1 default=ignore] pam_unix.so obscure use_authtok try_first_pass yescrypt remember={{ password_history }}"
+    state: present
+  when: ansible_os_family == "Debian"
+
+# ── 6. ACCOUNT LOCKOUT POLICY ──
+- name: Configure account lockout (PAM faillock)
+  ansible.builtin.copy:
+    content: |
+      # Lock account after {{ fail2ban_max_retry }} failed attempts
+      # Unlock after {{ fail2ban_ban_time }} seconds
+      deny = {{ fail2ban_max_retry }}
+      unlock_time = {{ fail2ban_ban_time }}
+      fail_interval = {{ fail2ban_find_time }}
+      audit
+      silent
+    dest: /etc/security/faillock.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# ── 7. REMOVE UNUSED DEFAULT ACCOUNTS ──
+- name: Remove unnecessary default accounts
+  ansible.builtin.user:
+    name: "{{ item }}"
+    state: absent
+    remove: false           # don't delete home dirs — may have logs
+  loop:
+    - games
+    - news
+    - uucp
+    - proxy
+    - list
+    - irc
+    - gnats
+  failed_when: false
+
+# ── 8. SECURE HOME DIRECTORIES ──
+- name: Set strict permissions on home directories
+  ansible.builtin.shell: |
+    for dir in /home/*/; do
+      chmod 750 "$dir"
+    done
+  changed_when: false

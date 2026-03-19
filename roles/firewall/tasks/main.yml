@@ -1,0 +1,110 @@
+---
+# ══════════════════════════════════════════
+# ROLE: firewall
+# UFW for Ubuntu / firewalld for RHEL
+# Default deny, whitelist only
+# ══════════════════════════════════════════
+
+# ── UBUNTU — UFW ──
+- name: Install UFW (Ubuntu)
+  ansible.builtin.package:
+    name: ufw
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Reset UFW to default state
+  community.general.ufw:
+    state: reset
+  when: ansible_os_family == "Debian"
+
+- name: Set UFW default policy — deny all incoming
+  community.general.ufw:
+    default: deny
+    direction: incoming
+  when: ansible_os_family == "Debian"
+
+- name: Set UFW default policy — allow all outgoing
+  community.general.ufw:
+    default: allow
+    direction: outgoing
+  when: ansible_os_family == "Debian"
+
+- name: Allow SSH on non-default port from VPC CIDR only
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port }}"
+    proto: tcp
+    src: "{{ firewall_allowed_from_cidr }}"
+    comment: "SSH from VPC only"
+  when: ansible_os_family == "Debian"
+
+- name: Allow MongoDB port from VPC CIDR only
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    src: "{{ firewall_allowed_from_cidr }}"
+    comment: "MongoDB from VPC only"
+  loop: "{{ firewall_allowed_tcp_ports }}"
+  when:
+    - ansible_os_family == "Debian"
+    - item != ssh_port
+
+- name: Enable UFW with logging
+  community.general.ufw:
+    state: enabled
+    logging: 'on'
+  when: ansible_os_family == "Debian"
+
+# ── RHEL/AMAZON LINUX — firewalld ──
+- name: Install firewalld (RHEL)
+  ansible.builtin.package:
+    name: firewalld
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Start and enable firewalld
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: true
+  when: ansible_os_family == "RedHat"
+
+- name: Set default zone to drop
+  ansible.builtin.command:
+    cmd: firewall-cmd --set-default-zone=drop
+  changed_when: false
+  when: ansible_os_family == "RedHat"
+
+- name: Allow SSH on custom port (RHEL)
+  ansible.posix.firewalld:
+    port: "{{ ssh_port }}/tcp"
+    zone: internal
+    permanent: true
+    state: enabled
+    source: "{{ firewall_allowed_from_cidr }}"
+  when: ansible_os_family == "RedHat"
+  notify: reload firewalld
+
+- name: Allow MongoDB port from VPC only (RHEL)
+  ansible.posix.firewalld:
+    port: "27017/tcp"
+    zone: internal
+    permanent: true
+    state: enabled
+    source: "{{ firewall_allowed_from_cidr }}"
+  when: ansible_os_family == "RedHat"
+  notify: reload firewalld
+
+# ── BOTH — iptables persistence ──
+- name: Ensure iptables-persistent is installed (Ubuntu)
+  ansible.builtin.package:
+    name: iptables-persistent
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Save iptables rules
+  ansible.builtin.shell: |
+    netfilter-persistent save
+  changed_when: false
+  when: ansible_os_family == "Debian"
